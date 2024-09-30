@@ -21,12 +21,59 @@ ApplicationWindow {
         id: map
         anchors.fill: parent
         plugin: osmPlugin
-        center: QtPositioning.coordinate(51.0443585623781, -114.06312895427341)
+        center: QtPositioning.coordinate(51.0443585623781, -114.06312895427341) // Calgary Tower
         zoomLevel: 16
         property geoCoordinate startCentroid
 
-        // ... (same map handlers as before)
+        PinchHandler {
+            id: pinch
+            target: null
+            onActiveChanged: if (active) {
+                map.startCentroid = map.toCoordinate(pinch.centroid.position, false)
+            }
+            onScaleChanged: (delta) => {
+                map.zoomLevel += Math.log2(delta)
+                map.alignCoordinateToPoint(map.startCentroid, pinch.centroid.position)
+            }
+            onRotationChanged: (delta) => {
+                map.bearing -= delta
+                map.alignCoordinateToPoint(map.startCentroid, pinch.centroid.position)
+            }
+            grabPermissions: PointerHandler.TakeOverForbidden
+        }
 
+        // Corrected WheelHandler for zooming
+        WheelHandler {
+            id: wheelHandler
+            target: map
+            onWheel: (wheel) => {
+                if (wheel.angleDelta.y > 0) {
+                    map.zoomLevel += 0.5  // Zoom in
+                } else {
+                    map.zoomLevel -= 0.5  // Zoom out
+                }
+            }
+        }
+
+        DragHandler {
+            id: drag
+            target: null
+            onTranslationChanged: (delta) => map.pan(-delta.x, -delta.y)
+        }
+
+        Shortcut {
+            enabled: map.zoomLevel < map.maximumZoomLevel
+            sequence: StandardKey.ZoomIn
+            onActivated: map.zoomLevel = Math.round(map.zoomLevel + 1)
+        }
+
+        Shortcut {
+            enabled: map.zoomLevel > map.minimumZoomLevel
+            sequence: StandardKey.ZoomOut
+            onActivated: map.zoomLevel = Math.round(map.zoomLevel - 1)
+        }
+
+        // MouseArea to detect map clicks and place markers
         MouseArea {
             id: mouseArea
             anchors.fill: parent
@@ -41,10 +88,12 @@ ApplicationWindow {
             }
         }
 
+        // Data model to store marker coordinates and their labels
         ListModel {
             id: mapModel
         }
 
+        // Delegate for map markers
         MapItemView {
             model: mapModel
             delegate: MapQuickItem {
