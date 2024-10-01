@@ -7,7 +7,7 @@ ApplicationWindow {
     visible: true
     width: 1000
     height: 1000
-    title: "OpenStreetMap Viewer"
+    title: "Quantum Route Optimization (TSP)"
 
     // Array to store clicked coordinates
     property var map_items: []

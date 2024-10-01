@@ -21,9 +21,9 @@ def process_map_items(map_items):
     """
     # print("Processing map items:", map_items)
     
-    distance_matrix = get_tsp_matrix(map_items)
+    distance_matrix = np.round(10000*get_tsp_matrix(map_items),0)
 
-    # print("The distance matrix: ", distance_matrix)
+    print("The distance matrix: ", distance_matrix)
     # Example: Count the number of items and return it
     
     n = len(map_items)
@@ -43,14 +43,19 @@ def process_map_items(map_items):
     ry = TwoLocal(qubitOp.num_qubits, "ry", "cz", reps=5, entanglement="linear")
     vqe = SamplingVQE(sampler=Sampler(), ansatz=ry, optimizer=optimizer)
 
-    result = vqe.compute_minimum_eigenvalue(qubitOp)
+    # result = vqe.compute_minimum_eigenvalue(qubitOp)
+    vqe_optimizer = MinimumEigenOptimizer(vqe)
 
-    print("energy:", result.eigenvalue.real)
-    print("time:", result.optimizer_time)
-    x = tsp.sample_most_likely(result.eigenstate)
-    print("feasible:", qubo.is_feasible(x))
+    # solve quadratic program
+    result = vqe_optimizer.solve(qp)
+    z = tsp.interpret(result)
+    # print("Result is: ", result, z)
+    # print("energy:", result.eigenvalue.real)
+    # print("time:", result.optimizer_time)
+    # x = tsp.sample_most_likely(result.eigenstate)
+    # print("feasible:", qubo.is_feasible(x))
     
-    z = tsp.interpret(x)
+    # z = tsp.interpret(x)
     print("solution:", z)
     return z
 
