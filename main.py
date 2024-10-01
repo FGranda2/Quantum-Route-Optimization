@@ -12,7 +12,7 @@ class MapOptimizer(QObject):
         self.map_items = []
 
     # Expose a signal to send data back to QML if needed
-    optimization_result = Signal(int)
+    optimization_result = Signal(list)
 
     @Slot(list)
     def set_map_items(self, items):

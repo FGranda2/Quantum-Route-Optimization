@@ -17,6 +17,27 @@ ApplicationWindow {
         name: "osm"
     }
 
+    Connections {
+        target: optimizer  // backend is the Python object exposed to QML
+
+        onOptimization_result: {
+            // When the listSignal is emitted, this will be triggered
+            var receivedList = arguments[0]
+            console.log("Received list:", receivedList)
+            mapModel.clear()
+            for (var i = 0; i < receivedList.length; i++) {
+                var latLon = map_items[receivedList[i]]
+
+                // Create a coordinate for the current lat/lon pair
+                var coord = QtPositioning.coordinate(latLon[0], latLon[1])
+
+                // Append the coordinate and label to the mapModel
+                mapModel.append({coordinate: coord, label: i + 1})
+            }
+
+        }
+    }
+
     Map {
         id: map
         anchors.fill: parent

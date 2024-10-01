@@ -1,4 +1,17 @@
+# useful additional packages
+import matplotlib.pyplot as plt
 import numpy as np
+import networkx as nx
+
+from qiskit.circuit.library import TwoLocal
+from qiskit_optimization.applications import Maxcut, Tsp
+from qiskit_algorithms import SamplingVQE, NumPyMinimumEigensolver
+from qiskit_algorithms.optimizers import SPSA
+from qiskit_algorithms.utils import algorithm_globals
+from qiskit.primitives import Sampler
+from qiskit_optimization.algorithms import MinimumEigenOptimizer
+from qiskit_optimization.converters import QuadraticProgramToQubo
+import networkx as nx
 
 # optimization/optimize.py
 def process_map_items(map_items):
@@ -6,13 +19,40 @@ def process_map_items(map_items):
     Example function that processes map_items array.
     Here, we just return the number of map items for simplicity.
     """
-    print("Processing map items:", map_items)
+    # print("Processing map items:", map_items)
     
     distance_matrix = get_tsp_matrix(map_items)
 
-    print("The distance matrix: ", distance_matrix)
+    # print("The distance matrix: ", distance_matrix)
     # Example: Count the number of items and return it
-    return len(map_items)
+    
+    n = len(map_items)
+    G = nx.from_numpy_array(distance_matrix)
+
+    tsp = Tsp(G)
+    qp = tsp.to_quadratic_program()
+    # print(qp.prettyprint())
+
+    qp2qubo = QuadraticProgramToQubo()
+    qubo = qp2qubo.convert(qp)
+    qubitOp, offset = qubo.to_ising()
+    print("Offset:", offset)
+    print("Ising Hamiltonian:")
+    # print(str(qubitOp))
+    optimizer = SPSA(maxiter=300)
+    ry = TwoLocal(qubitOp.num_qubits, "ry", "cz", reps=5, entanglement="linear")
+    vqe = SamplingVQE(sampler=Sampler(), ansatz=ry, optimizer=optimizer)
+
+    result = vqe.compute_minimum_eigenvalue(qubitOp)
+
+    print("energy:", result.eigenvalue.real)
+    print("time:", result.optimizer_time)
+    x = tsp.sample_most_likely(result.eigenstate)
+    print("feasible:", qubo.is_feasible(x))
+    
+    z = tsp.interpret(x)
+    print("solution:", z)
+    return z
 
 def create_nodes_array(N, seed=None):
     """
