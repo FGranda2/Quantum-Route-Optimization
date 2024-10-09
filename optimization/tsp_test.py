@@ -14,6 +14,10 @@ from qiskit_optimization.converters import QuadraticProgramToQubo
 import networkx as nx
 
 from qiskit.quantum_info import SparsePauliOp
+from qiskit.circuit.library import QAOAAnsatz
+from scipy.optimize import minimize
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+from qiskit_aer.primitives import EstimatorV2, SamplerV2
 
 
 def build_max_cut_paulis(Q: np.ndarray) -> list[tuple[str, float]]:
@@ -173,3 +177,81 @@ print("-------------------------------------------------------------------------
 pauli_result = build_max_cut_paulis(my_obj)
 cost_hamiltonian = SparsePauliOp.from_list(pauli_result)
 print(cost_hamiltonian.coeffs)
+repetitions = 2**2
+circuit = QAOAAnsatz(cost_operator=qubitOp, reps=repetitions)
+circuit.measure_all()
+
+circuit.draw('mpl')
+# plt.show()
+
+pm = generate_preset_pass_manager(optimization_level=3)
+
+candidate_circuit = pm.run(circuit)
+
+initial_gamma = 0.5
+initial_beta = 0.5
+init_params = [initial_beta]*repetitions + [initial_gamma]*repetitions
+print("INIT PARAMS: " , init_params)
+objective_func_vals = [] # Global variable
+
+def cost_func_estimator(params, ansatz, hamiltonian, estimator):
+
+    # transform the observable defined on virtual qubits to
+    # an observable defined on all physical qubits
+    isa_hamiltonian = hamiltonian.apply_layout(ansatz.layout)
+
+    pub = (ansatz, isa_hamiltonian, params)
+    job = estimator.run([pub])
+
+    results = job.result()[0]
+    cost = results.data.evs
+
+    objective_func_vals.append(cost)
+
+
+    return cost
+
+# If using qiskit-ibm-runtime<0.24.0, change `mode=` to `session=`
+estimator = EstimatorV2()
+estimator.options.default_shots = 1000
+
+result = minimize(
+    cost_func_estimator,
+    init_params,
+    args=(candidate_circuit, qubitOp, estimator),
+    method="SLSQP",
+    tol=1e-2,
+)
+print(result)
+
+# plt.figure(figsize=(12, 6))
+# plt.plot(objective_func_vals)
+# plt.xlabel("Iteration")
+# plt.ylabel("Cost")
+# plt.show()
+
+optimized_circuit = candidate_circuit.assign_parameters(result.x)
+
+sampler = SamplerV2()
+shots = 1000
+
+pub= (optimized_circuit, )
+job = sampler.run([pub], shots=shots)
+counts_int = job.result()[0].data.meas.get_int_counts()
+counts_bin = job.result()[0].data.meas.get_counts()
+shots = sum(counts_int.values())
+final_distribution_int = {key: val/shots for key, val in counts_int.items()}
+final_distribution_bin = {key: val/shots for key, val in counts_bin.items()}
+# print(final_distribution_int)
+
+def to_bitstring(integer, num_bits):
+    result = np.binary_repr(integer, width=num_bits)
+    return [int(digit) for digit in result]
+
+keys = list(final_distribution_int.keys())
+values = list(final_distribution_int.values())
+most_likely = keys[np.argmax(np.abs(values))]
+most_likely_bitstring = to_bitstring(most_likely, n_bits**2)
+most_likely_bitstring.reverse()
+
+print("Result bitstring:", most_likely_bitstring)
