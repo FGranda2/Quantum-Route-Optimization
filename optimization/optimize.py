@@ -39,7 +39,7 @@ def process_map_items(map_items):
     print("Offset:", offset)
     print("Ising Hamiltonian:")
     # print(str(qubitOp))
-    optimizer = SPSA(maxiter=300)
+    optimizer = SPSA(maxiter=10)
     ry = TwoLocal(qubitOp.num_qubits, "ry", "cz", reps=5, entanglement="linear")
     vqe = SamplingVQE(sampler=Sampler(), ansatz=ry, optimizer=optimizer)
 
