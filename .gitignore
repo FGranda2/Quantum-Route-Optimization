@@ -1,5 +1,5 @@
 # Byte-compiled / optimized / DLL files
-testbench_venv
+venv_test
 __pycache__/
 *.py[cod]
 *$py.class

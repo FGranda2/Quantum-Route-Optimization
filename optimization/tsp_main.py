@@ -4,13 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
 
-from qiskit.circuit.library import TwoLocal
-from qiskit_optimization.applications import Maxcut, Tsp
-from qiskit_algorithms import SamplingVQE, NumPyMinimumEigensolver
-from qiskit_algorithms.optimizers import SPSA
-from qiskit_algorithms.utils import algorithm_globals
-from qiskit.primitives import Sampler
-from qiskit_optimization.algorithms import MinimumEigenOptimizer
+from qiskit_optimization.applications import Tsp
 from qiskit_optimization.converters import QuadraticProgramToQubo
 import networkx as nx
 
@@ -18,9 +12,7 @@ from qiskit.quantum_info import SparsePauliOp
 from qiskit.circuit.library import QAOAAnsatz
 from scipy.optimize import minimize
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-# from qiskit_aer.primitives import EstimatorV2, SamplerV2
 from qiskit_ibm_runtime import EstimatorV2, SamplerV2
-
 from qiskit_aer import AerSimulator
 
 aer_sim = AerSimulator()
@@ -82,61 +74,7 @@ def build_max_cut_paulis(Q: np.ndarray) -> list[tuple[str, float]]:
 
     return pauli_list
 
-def add_constraints_to_Q(Q, n, penalty):
-    # Constraint for each city (row constraints)
-    for i in range(n):
-        for p1 in range(n):
-            qubit1 = i * n + p1
-            Q[qubit1, qubit1] += penalty  # Add penalty to diagonal
-            for p2 in range(p1+1, n):
-                qubit2 = i * n + p2
-                Q[qubit1, qubit2] += 2 * penalty  # Off-diagonal terms
-
-    # Constraint for each position (column constraints)
-    for p in range(n):
-        for i1 in range(n):
-            qubit1 = i1 * n + p
-            Q[qubit1, qubit1] += penalty  # Add penalty to diagonal
-            for i2 in range(i1+1, n):
-                qubit2 = i2 * n + p
-                Q[qubit1, qubit2] += 2 * penalty  # Off-diagonal terms
-
-    # Subtract the linear terms
-    for i in range(n):
-        for p in range(n):
-            qubit = i * n + p
-            Q[qubit, qubit] -= 2 * penalty
-
-    return Q
-
-def compute_Q_for_tsp_with_binary_variables(distance_matrix):
-    n = distance_matrix.shape[0]  # Number of cities
-    Q = np.zeros((n**2, n**2))  # Initialize the QUBO matrix (n^2 x n^2)
-
-    # Iterate over each position in the tour
-    for p in range(n):  # Current position in the tour
-        for i in range(n):  # Current city
-            for j in range(n):  # Next city
-                if i == j:
-                    continue  # Skip self-loops
-
-                # Calculate qubit indices
-                qubit_a = i * n + p
-                qubit_b = j * n + ((p + 1) % n)
-
-                # Ensure we only fill the upper triangular part
-                if qubit_a < qubit_b:
-                    Q[qubit_a, qubit_b] += distance_matrix[i,j]  # Add weight from city i to j
-                elif qubit_a > qubit_b:
-                    Q[qubit_b, qubit_a] += distance_matrix[i,j]  # Add weight from city i to j
-                # When qubit_a == qubit_b, we don't add anything (diagonal elements)
-
-     # Add constraint terms
-    Q = add_constraints_to_Q(Q, n, 91)
-
-    return Q
-
-def compute_Q_for_tsp_with_constraints_v2(distance_matrix, penalty):
+def compute_Q_with_constraints(distance_matrix, penalty):
     n = distance_matrix.shape[0]  # Number of cities
     Q = np.zeros((n**2, n**2))  # Initialize the QUBO matrix (n^2 x n^2)
 
@@ -162,7 +100,7 @@ def compute_Q_for_tsp_with_constraints_v2(distance_matrix, penalty):
             Q[qubit, qubit] += -2*penalty * (1 - 2)  # -penalty from (x - 1)^2 expansion
             row_weights = 0 
             
-            # Add the QUBO vector term (diagonal elements)
+            # Add the QUBO vector term (row elements)
             for j in range(n):
                 row_weights += distance_matrix[i,j]
             Q[qubit, qubit] += 2*(row_weights*2)/4
@@ -183,66 +121,54 @@ def compute_Q_for_tsp_with_constraints_v2(distance_matrix, penalty):
 
     return Q
 
+def to_bitstring(integer, num_bits):
+    result = np.binary_repr(integer, width=num_bits)
+    return [int(digit) for digit in result]
+
+# Number of nodes
 n_bits = 3
-# [[ 0. 48. 91.]
-#  [48.  0. 63.]
-#  [91. 63.  0.]]
+
+# Create adjacency matrix
 adj_matrix = np.array([[ 0, 48, 91,],[48,  0, 63,], [91, 63,  0,]])
 
+# Create graph
 G = nx.from_numpy_array(adj_matrix)
 
+# Form parallel Tsp program for checking
 tsp = Tsp(G)
 qp = tsp.to_quadratic_program()
-print("QP PROBLEM", qp.prettyprint())
-print("--------------------------------------------------------------------------")
-print("OBJECTIVE:")
-print(qp.objective.quadratic.to_array())
-print("--------------------------------------------------------------------------")
+
+# Add penalty value for constraints
 penalty = 1200
-my_obj = compute_Q_for_tsp_with_constraints_v2(adj_matrix, penalty)
-# my_obj = compute_Q_for_tsp_with_binary_variables(adj_matrix)
-print("MY:")
-print(my_obj)
+my_obj = compute_Q_with_constraints(adj_matrix, penalty)
 
-
-qp2qubo = QuadraticProgramToQubo(penalty)
+# Build parallel QUBO from Tsp
+qp2qubo = QuadraticProgramToQubo()
 qubo = qp2qubo.convert(qp)
 
-# Get the number of variables
-sense = qubo.objective.sense.value
-# print("QUBO PENALTY: ", qubo.objective.)
-print("SENSE: ", sense)
-print("QUBO: ", qubo)
-print("LINEAR TERMS: ", qubo.objective.linear.to_dict().items())
-print("QUBO Constant TERM:", qubo.objective.constant)
-print("QUADRATIC TERMS: ", qubo.objective.quadratic)
-for idx, coef in qubo.objective.linear.to_dict().items():
-    print("---",idx,coef)
-
+# Do conversion to ising hamiltonian using QUBO converter
 qubitOp, offset = qubo.to_ising()
-print("Offset:", offset)
-print("Ising Hamiltonian:")
-print(str(qubitOp.coeffs))
 
-print("--------------------------------------------------------------------------")
+# Do conversion to ising hamiltonian using custon function
 pauli_result = build_max_cut_paulis(my_obj)
 cost_hamiltonian = SparsePauliOp.from_list(pauli_result)
-print(cost_hamiltonian.coeffs)
-repetitions = 1
-circuit = QAOAAnsatz(cost_operator=qubitOp, reps=repetitions)
+
+# Select target [TSP or custom]
+target_program = cost_hamiltonian # Choose Custom
+
+# Build the QAOA Circuit 
+repetitions = 16
+circuit = QAOAAnsatz(cost_operator=target_program, reps=repetitions)
 circuit.measure_all()
 
-circuit.draw('mpl')
-# plt.show()
-
+# Do transpiling and optimization
 pm = generate_preset_pass_manager(optimization_level=3)
-
 candidate_circuit = pm.run(circuit)
 
-initial_gamma = 1.6
-initial_beta = 2.9
+# Apply optimization of circuit parameters
+initial_gamma = np.pi
+initial_beta = np.pi*2
 init_params = [val for _ in range(repetitions) for val in [initial_gamma, initial_beta]]
-print("INIT PARAMS: " , init_params)
 objective_func_vals = [] # Global variable
 
 def cost_func_estimator(params, ansatz, hamiltonian, estimator):
@@ -262,29 +188,27 @@ def cost_func_estimator(params, ansatz, hamiltonian, estimator):
 
     return cost
 
-# If using qiskit-ibm-runtime<0.24.0, change `mode=` to `session=`
+# Use AER Backend for Estimator
 estimator = EstimatorV2(mode=aer_sim)
 
+# Minimize the parameters
 result = minimize(
     cost_func_estimator,
     init_params,
-    args=(candidate_circuit, qubitOp, estimator),
-    method="COBYQA",
+    args=(candidate_circuit, target_program, estimator),
+    method="Nelder-Mead",
     tol=1e-7,
 )
 print(result)
 
-# plt.figure(figsize=(12, 6))
-# plt.plot(objective_func_vals)
-# plt.xlabel("Iteration")
-# plt.ylabel("Cost")
-# plt.show()
-
+# Apply parameters to the circuit
 optimized_circuit = candidate_circuit.assign_parameters(result.x)
 
+# Create a sampler
 sampler = SamplerV2(mode=aer_sim)
-shots = 500000
+shots = 300000
 
+# Run the job
 pub= (optimized_circuit, )
 job = sampler.run([pub], shots=shots)
 counts_int = job.result()[0].data.meas.get_int_counts()
@@ -292,16 +216,11 @@ counts_bin = job.result()[0].data.meas.get_counts()
 shots = sum(counts_int.values())
 final_distribution_int = {key: val/shots for key, val in counts_int.items()}
 final_distribution_bin = {key: val/shots for key, val in counts_bin.items()}
-# print(final_distribution_int)
 
-def to_bitstring(integer, num_bits):
-    result = np.binary_repr(integer, width=num_bits)
-    return [int(digit) for digit in result]
-
+# Process the results
 keys = list(final_distribution_int.keys())
 values = list(final_distribution_int.values())
 most_likely = keys[np.argmax(np.abs(values))]
-print("Most Likely: ", most_likely)
 most_likely_bitstring = to_bitstring(most_likely, n_bits**2)
 most_likely_bitstring.reverse()
 
