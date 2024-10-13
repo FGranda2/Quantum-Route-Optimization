@@ -1,21 +1,67 @@
-# useful additional packages
+from qiskit_alice_bob_provider import AliceBobLocalProvider
+from qiskit import QuantumCircuit, execute, transpile
+from qiskit.primitives import BackendSampler, BackendEstimator
+from qiskit.quantum_info import SparsePauliOp
+
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+from qiskit.circuit.library import EfficientSU2
+from qiskit.transpiler.layout import TranspileLayout
+
 from typing import Union, List
 import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
-
-from qiskit_optimization.applications import Tsp
-from qiskit_optimization.converters import QuadraticProgramToQubo
-import networkx as nx
-
-from qiskit.quantum_info import SparsePauliOp
-from qiskit.circuit.library import QAOAAnsatz, EfficientSU2
 from scipy.optimize import minimize
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-from qiskit_ibm_runtime import EstimatorV2, SamplerV2
-from qiskit_aer import AerSimulator
 
-aer_sim = AerSimulator()
+
+provider = AliceBobLocalProvider()
+# print(provider.backends())
+backend = provider.get_backend('EMU:40Q:LOGICAL_TARGET')
+
+def apply_layout(
+    operator: SparsePauliOp,
+    layout: TranspileLayout | List[int] | None,
+    num_qubits: int | None = None
+) -> SparsePauliOp:
+    """Apply a transpiler layout to a SparsePauliOp
+
+    Args:
+        operator: The SparsePauliOp to apply the layout to.
+        layout: Either a TranspileLayout, a list of integers or None.
+                If both layout and num_qubits are none, a copy of the operator is
+                returned.
+        num_qubits: The number of qubits to expand the operator to. If not
+                provided then if `layout` is a TranspileLayout the
+                number of the transpiler output circuit qubits will be used by
+                default. If `layout` is a list of integers the permutation
+                specified will be applied without any expansion. If layout is
+                None, the operator will be expanded to the given number of qubits.
+
+    Returns:
+        A new SparsePauliOp with the provided layout applied
+    """
+    if layout is None and num_qubits is None:
+        return operator.copy()
+
+    n_qubits = operator.num_qubits
+    if isinstance(layout, TranspileLayout):
+        n_qubits = len(layout._output_qubit_list)
+        layout = layout.final_index_layout()
+    if num_qubits is not None:
+        if num_qubits < n_qubits:
+            print("Error")
+        n_qubits = num_qubits
+    if layout is None:
+        layout = list(range(operator.num_qubits))
+    else:
+        if any(x < 0 or x >= n_qubits for x in layout):
+            print("Provided layout contains indices outside the number of qubits.")
+        if len(set(layout)) != len(layout):
+            print("Provided layout contains duplicate indices.")
+    if operator.num_qubits == 0:
+        return SparsePauliOp(["I" * n_qubits] * operator.size, operator.coeffs)
+    new_op = SparsePauliOp("I" * n_qubits)
+    return new_op.compose(operator, qargs=layout)
 
 def interpret_tsp_result(x: Union[List[float], np.ndarray]) -> List[int]:
     """
@@ -126,47 +172,34 @@ def to_bitstring(integer, num_bits):
     return [int(digit) for digit in result]
 
 # Number of nodes
-n_bits = 4
+n_bits = 3
 #         [0, 400, 600, 800],
 #         [400, 0, 300, 500],
 #         [600, 300, 0, 700],
 #         [800, 500, 700, 0]
 # Create adjacency matrix
-# adj_matrix = np.array([[ 0, 48, 91,],[48,  0, 63,], [91, 63,  0,]])
+adj_matrix = np.array([[ 0, 48, 91,],[48,  0, 63,], [91, 63,  0,]])
 # adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 700],[800, 500, 700, 0]])
-adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 700],[800, 500, 700, 0]])
 # Create graph
 G = nx.from_numpy_array(adj_matrix)
 
-# Form parallel Tsp program for checking
-tsp = Tsp(G)
-qp = tsp.to_quadratic_program()
-
-# Add penalty value for constraints
-penalty = 200000
+penalty = 1200
 my_obj = compute_Q_with_constraints(adj_matrix, penalty)
-
-# Build parallel QUBO from Tsp
-qp2qubo = QuadraticProgramToQubo()
-qubo = qp2qubo.convert(qp)
-print("QUBO Constant TERM:", qubo.objective.constant)
-# Do conversion to ising hamiltonian using QUBO converter
-qubitOp, offset = qubo.to_ising()
 
 # Do conversion to ising hamiltonian using custon function
 pauli_result = build_max_cut_paulis(my_obj)
 cost_hamiltonian = SparsePauliOp.from_list(pauli_result)
 
 # Select target [TSP or custom]
-target_program = qubitOp # Choose Custom
+target_program = cost_hamiltonian # Choose Custom
 
 ansatz = EfficientSU2(target_program.num_qubits)
 ansatz.measure_all()
 pm = generate_preset_pass_manager(optimization_level=3)
 
 ansatz_isa = pm.run(ansatz)
-hamiltonian_isa = target_program.apply_layout(layout=ansatz_isa.layout)
-
+# hamiltonian_isa = target_program.apply_layout(layout=ansatz_isa.layout)
+hamiltonian_isa = apply_layout(target_program, ansatz_isa.layout)
 cost_history_dict = {
     "prev_vector": None,
     "iters": 0,
@@ -180,50 +213,56 @@ def cost_func(params, ansatz, hamiltonian, estimator):
         params (ndarray): Array of ansatz parameters
         ansatz (QuantumCircuit): Parameterized ansatz circuit
         hamiltonian (SparsePauliOp): Operator representation of Hamiltonian
-        estimator (EstimatorV2): Estimator primitive instance
-        cost_history_dict: Dictionary for storing intermediate results
+        estimator (BackendEstimator): Estimator primitive instance
 
     Returns:
         float: Energy estimate
     """
-    pub = (ansatz, [hamiltonian], [params])
-    result = estimator.run(pubs=[pub]).result()
-    energy = result[0].data.evs[0]
+    # Bind the parameters to the ansatz
+    bound_circuit = ansatz.bind_parameters(params)
 
+    # Run the estimator
+    job = estimator.run(circuits=[bound_circuit], observables=[hamiltonian])
+    result = job.result()
+    energy = result.values[0]
+
+    # Update cost history
     cost_history_dict["iters"] += 1
     cost_history_dict["prev_vector"] = params
     cost_history_dict["cost_history"].append(energy)
     print(f"Iters. done: {cost_history_dict['iters']} [Current cost: {energy}]")
-
     return energy
 
 num_params = ansatz.num_parameters
 print("NUMBER OF PARAMETERS: ", num_params)
 x0 = 2 * np.pi * np.random.random(num_params)
-estimator = EstimatorV2(mode=aer_sim)
+estimator = BackendEstimator(backend)
 
 res = minimize(
         cost_func,
         x0,
         args=(ansatz_isa, hamiltonian_isa, estimator),
         method="COBYLA",
-        tol=1e-7,
-        options={'maxiter': 5000}  # Set maximum iterations to 5000
+        tol=1e-2,
+        options={'maxiter': 1000}  # Set maximum iterations to 5000
     )
 
 print(res)
 
 optimized_circuit = ansatz_isa.assign_parameters(res.x)
 
-# Create a sampler
-sampler = SamplerV2(mode=aer_sim)
-shots = 500000
-
 # Run the job
-pub= (optimized_circuit, )
-job = sampler.run([pub], shots=shots)
-counts_int = job.result()[0].data.meas.get_int_counts()
-counts_bin = job.result()[0].data.meas.get_counts()
+sampler = BackendSampler(backend)
+shots = 10000
+job = sampler.run([optimized_circuit], shots=shots)
+result = job.result()
+
+# Get the counts
+counts = result.quasi_dists[0]
+
+# Convert quasi-distribution to integer and binary counts
+counts_int = counts
+counts_bin = {k: v for k, v in counts.items()}
 shots = sum(counts_int.values())
 final_distribution_int = {key: val/shots for key, val in counts_int.items()}
 final_distribution_bin = {key: val/shots for key, val in counts_bin.items()}

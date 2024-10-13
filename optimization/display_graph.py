@@ -3,7 +3,7 @@ import networkx as nx
 import numpy as np
 
 # Assuming you already have your adj_matrix defined
-adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 1000],[800, 500, 1000, 0]])
+adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 700],[800, 500, 700, 0]])
 
 # Create graph
 G = nx.from_numpy_array(adj_matrix)

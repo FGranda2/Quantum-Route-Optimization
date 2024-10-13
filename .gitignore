@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 venv_test
+cats_venv
 __pycache__/
 *.py[cod]
 *$py.class

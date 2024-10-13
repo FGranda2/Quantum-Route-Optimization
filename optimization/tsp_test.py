@@ -165,7 +165,7 @@ def compute_Q_for_tsp_with_constraints_v2(distance_matrix, penalty):
             # Add the QUBO vector term (diagonal elements)
             for j in range(n):
                 row_weights += distance_matrix[i,j]
-            Q[qubit, qubit] += 2*(row_weights*2)/4
+            Q[qubit, qubit] += 2*(row_weights*(n-1))/4
             
 
         for p in range(n):
@@ -183,12 +183,12 @@ def compute_Q_for_tsp_with_constraints_v2(distance_matrix, penalty):
 
     return Q
 
-n_bits = 3
+n_bits = 4
 # [[ 0. 48. 91.]
 #  [48.  0. 63.]
 #  [91. 63.  0.]]
 adj_matrix = np.array([[ 0, 48, 91,],[48,  0, 63,], [91, 63,  0,]])
-
+adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 700],[800, 500, 700, 0]])
 G = nx.from_numpy_array(adj_matrix)
 
 tsp = Tsp(G)
