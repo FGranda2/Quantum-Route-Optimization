@@ -9,8 +9,9 @@ from qiskit_optimization.converters import QuadraticProgramToQubo
 import networkx as nx
 
 from qiskit.quantum_info import SparsePauliOp
-from qiskit.circuit.library import QAOAAnsatz, EfficientSU2
+from qiskit.circuit.library import QAOAAnsatz, EfficientSU2, ExcitationPreserving
 from scipy.optimize import minimize
+from qiskit_algorithms.optimizers import COBYLA
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit_ibm_runtime import EstimatorV2, SamplerV2
 from qiskit_aer import AerSimulator
@@ -126,15 +127,15 @@ def to_bitstring(integer, num_bits):
     return [int(digit) for digit in result]
 
 # Number of nodes
-n_bits = 4
+n_bits = 3
 #         [0, 400, 600, 800],
 #         [400, 0, 300, 500],
 #         [600, 300, 0, 700],
 #         [800, 500, 700, 0]
 # Create adjacency matrix
-# adj_matrix = np.array([[ 0, 48, 91,],[48,  0, 63,], [91, 63,  0,]])
+adj_matrix = np.array([[ 0, 48, 91,],[48,  0, 63,], [91, 63,  0,]])
 # adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 700],[800, 500, 700, 0]])
-adj_matrix = np.array([[0, 400, 600, 800],[400, 0, 300, 500],[600, 300, 0, 700],[800, 500, 700, 0]])
+# adj_matrix = np.array([[0, 4, 6, 8],[4, 0, 3, 5],[6, 3, 0, 7],[8, 5, 7, 0]])
 # Create graph
 G = nx.from_numpy_array(adj_matrix)
 
@@ -143,7 +144,7 @@ tsp = Tsp(G)
 qp = tsp.to_quadratic_program()
 
 # Add penalty value for constraints
-penalty = 200000
+penalty = 200
 my_obj = compute_Q_with_constraints(adj_matrix, penalty)
 
 # Build parallel QUBO from Tsp
@@ -160,7 +161,7 @@ cost_hamiltonian = SparsePauliOp.from_list(pauli_result)
 # Select target [TSP or custom]
 target_program = qubitOp # Choose Custom
 
-ansatz = EfficientSU2(target_program.num_qubits)
+ansatz = EfficientSU2(target_program.num_qubits,reps=10, entanglement='full')
 ansatz.measure_all()
 pm = generate_preset_pass_manager(optimization_level=3)
 
@@ -199,17 +200,26 @@ def cost_func(params, ansatz, hamiltonian, estimator):
 
 num_params = ansatz.num_parameters
 print("NUMBER OF PARAMETERS: ", num_params)
-x0 = 2 * np.pi * np.random.random(num_params)
+x0 = 0* np.pi * np.random.random(num_params)
 estimator = EstimatorV2(mode=aer_sim)
 
-res = minimize(
-        cost_func,
-        x0,
-        args=(ansatz_isa, hamiltonian_isa, estimator),
-        method="COBYLA",
-        tol=1e-7,
-        options={'maxiter': 5000}  # Set maximum iterations to 5000
-    )
+# res = minimize(
+#         cost_func,
+#         x0,
+#         args=(ansatz_isa, hamiltonian_isa, estimator),
+#         method="COBYLA",
+#         tol=1e-7,
+#         options={'maxiter': 10000, 'eps': 0.01}  # Set maximum iterations to 5000
+#     )
+
+ # Initialize COBYLA optimizer
+optimizer = COBYLA(maxiter=20000, rhobeg=0.1, tol=1e-07)
+
+# Optimize by passing the vqe_cost function to the optimizer's minimize method
+res = optimizer.minimize(
+    fun=lambda x: cost_func(x, ansatz_isa, hamiltonian_isa, estimator),  # Cost function with fixed args
+    x0=x0  # Initial guess for parameters
+)
 
 print(res)
 
@@ -217,7 +227,7 @@ optimized_circuit = ansatz_isa.assign_parameters(res.x)
 
 # Create a sampler
 sampler = SamplerV2(mode=aer_sim)
-shots = 500000
+shots = 50000
 
 # Run the job
 pub= (optimized_circuit, )
